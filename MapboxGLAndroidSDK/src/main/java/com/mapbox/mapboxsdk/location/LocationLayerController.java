@@ -45,15 +45,23 @@ import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_FOREGROUND_STALE_ICON;
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_GPS_BEARING;
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_LOCATION_STALE;
+import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_PULSING_OPACITY;
+import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_PULSING_RADIUS;
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PROPERTY_SHADOW_ICON_OFFSET;
+import static com.mapbox.mapboxsdk.location.LocationComponentConstants.PULSING_CIRCLE_LAYER;
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.SHADOW_ICON;
 import static com.mapbox.mapboxsdk.location.LocationComponentConstants.SHADOW_LAYER;
+import static com.mapbox.mapboxsdk.style.expressions.Expression.get;
 import static com.mapbox.mapboxsdk.style.expressions.Expression.interpolate;
 import static com.mapbox.mapboxsdk.style.expressions.Expression.linear;
 import static com.mapbox.mapboxsdk.style.expressions.Expression.stop;
 import static com.mapbox.mapboxsdk.style.expressions.Expression.zoom;
 import static com.mapbox.mapboxsdk.style.layers.Property.NONE;
 import static com.mapbox.mapboxsdk.style.layers.Property.VISIBLE;
+import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.circleColor;
+import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.circleOpacity;
+import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.circleRadius;
+import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.circleStrokeColor;
 import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.iconSize;
 import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.visibility;
 import static com.mapbox.mapboxsdk.utils.ColorUtils.colorToRgbaString;
@@ -127,6 +135,7 @@ final class LocationLayerController {
     styleBearing(options);
     styleAccuracy(options.accuracyAlpha(), options.accuracyColor());
     styleScaling(options);
+    stylePulsingCircle(options);
     determineIconsSource(options);
 
     if (!isHidden) {
@@ -186,6 +195,13 @@ final class LocationLayerController {
     }
   }
 
+  /**
+   * Adjust the visibility of the pulsing LocationComponent circle.
+   */
+  void adjustPulsingCircleLayerVisibility(boolean visible) {
+    setLayerVisibility(PULSING_CIRCLE_LAYER, visible);
+  }
+
   void hide() {
     isHidden = true;
     for (String layerId : layerSet) {
@@ -242,11 +258,20 @@ final class LocationLayerController {
     addSymbolLayer(BACKGROUND_LAYER, FOREGROUND_LAYER);
     addSymbolLayer(SHADOW_LAYER, BACKGROUND_LAYER);
     addAccuracyLayer();
+    addPulsingCircleLayerToMap();
   }
 
   private void addSymbolLayer(@NonNull String layerId, @NonNull String beforeLayerId) {
     Layer layer = layerSourceProvider.generateLayer(layerId);
     addLayerToMap(layer, beforeLayerId);
+  }
+
+  /**
+   * Add the pulsing LocationComponent circle to the map for future use, if need be.
+   */
+  private void addPulsingCircleLayerToMap() {
+    Layer pulsingCircleLayer = layerSourceProvider.generatePulsingCircleLayer();
+    addLayerToMap(pulsingCircleLayer, ACCURACY_LAYER);
   }
 
   private void addAccuracyLayer() {
@@ -273,6 +298,30 @@ final class LocationLayerController {
 
   private void updateAccuracyRadius(float accuracy) {
     locationFeature.addNumberProperty(PROPERTY_ACCURACY_RADIUS, accuracy);
+    refreshSource();
+  }
+
+  /**
+   * Updates the {@link LocationComponentConstants#PROPERTY_PULSING_RADIUS} property value and refreshes
+   * the LocationComponent source. This leads to a smooth update to the visuals of the pulsing
+   * LocationComponent circle.
+   *
+   * @param radius The new radius in the animation.
+   */
+  private void updatePulsingLocationCircleRadius(float radius) {
+    locationFeature.addNumberProperty(PROPERTY_PULSING_RADIUS, radius);
+    refreshSource();
+  }
+
+  /**
+   * Updates the {@link LocationComponentConstants#PROPERTY_PULSING_OPACITY} property value and refreshes
+   * the LocationComponent source. This leads to a smooth update to the visuals of the pulsing
+   * LocationComponent circle. This is used if the fade option is set to true while setting pulsing options.
+   *
+   * @param opacity The new opacity in the animation.
+   */
+  private void updatePulsingLocationCircleOpacity(float opacity) {
+    locationFeature.addNumberProperty(PROPERTY_PULSING_OPACITY, opacity);
     refreshSource();
   }
 
@@ -306,10 +355,10 @@ final class LocationLayerController {
 
   private void styleBackground(LocationComponentOptions options) {
     Bitmap backgroundBitmap = bitmapProvider.generateBitmap(
-      options.backgroundDrawable(), options.backgroundTintColor()
+        options.backgroundDrawable(), options.backgroundTintColor()
     );
     Bitmap backgroundStaleBitmap = bitmapProvider.generateBitmap(
-      options.backgroundDrawableStale(), options.backgroundStaleTintColor()
+        options.backgroundDrawableStale(), options.backgroundStaleTintColor()
     );
     style.addImage(BACKGROUND_ICON, backgroundBitmap);
     style.addImage(BACKGROUND_STALE_ICON, backgroundStaleBitmap);
@@ -332,17 +381,17 @@ final class LocationLayerController {
 
   private void styleForeground(LocationComponentOptions options) {
     Bitmap foregroundBitmap = bitmapProvider.generateBitmap(
-      options.foregroundDrawable(), options.foregroundTintColor()
+        options.foregroundDrawable(), options.foregroundTintColor()
     );
     Bitmap foregroundBitmapStale = bitmapProvider.generateBitmap(
-      options.foregroundDrawableStale(), options.foregroundStaleTintColor()
+        options.foregroundDrawableStale(), options.foregroundStaleTintColor()
     );
     if (renderMode == RenderMode.GPS) {
       foregroundBitmap = bitmapProvider.generateBitmap(
-        options.gpsDrawable(), options.foregroundTintColor()
+          options.gpsDrawable(), options.foregroundTintColor()
       );
       foregroundBitmapStale = bitmapProvider.generateBitmap(
-        options.gpsDrawable(), options.foregroundStaleTintColor()
+          options.gpsDrawable(), options.foregroundStaleTintColor()
       );
     }
     style.addImage(FOREGROUND_ICON, foregroundBitmap);
@@ -354,20 +403,38 @@ final class LocationLayerController {
       Layer layer = style.getLayer(layerId);
       if (layer instanceof SymbolLayer) {
         layer.setProperties(
-          iconSize(
-            interpolate(linear(), zoom(),
-              stop(mapboxMap.getMinZoomLevel(), options.minZoomIconScale()),
-              stop(mapboxMap.getMaxZoomLevel(), options.maxZoomIconScale())
+            iconSize(
+                interpolate(linear(), zoom(),
+                    stop(mapboxMap.getMinZoomLevel(), options.minZoomIconScale()),
+                    stop(mapboxMap.getMaxZoomLevel(), options.maxZoomIconScale())
+                )
             )
-          )
         );
       }
     }
   }
 
+  /**
+   * Use the Maps SDK's data-driven styling properties to set the pulsing circle location UI.
+   *
+   * @param options The {@link LocationComponentOptions} set upstream during LocationComponent
+   *                initialization.
+   */
+  private void stylePulsingCircle(LocationComponentOptions options) {
+    if (style.getLayer(PULSING_CIRCLE_LAYER) != null) {
+      setLayerVisibility(PULSING_CIRCLE_LAYER, true);
+      style.getLayer(PULSING_CIRCLE_LAYER).setProperties(
+          circleRadius(get(PROPERTY_PULSING_RADIUS)),
+          circleColor(options.pulseColor()),
+          circleStrokeColor(options.pulseColor()),
+          circleOpacity(get(PROPERTY_PULSING_OPACITY))
+      );
+    }
+  }
+
   private void determineIconsSource(LocationComponentOptions options) {
     String foregroundIconString = buildIconString(
-      renderMode == RenderMode.GPS ? options.gpsName() : options.foregroundName(), FOREGROUND_ICON);
+        renderMode == RenderMode.GPS ? options.gpsName() : options.foregroundName(), FOREGROUND_ICON);
     String foregroundStaleIconString = buildIconString(options.foregroundStaleName(), FOREGROUND_STALE_ICON);
     String backgroundIconString = buildIconString(options.backgroundName(), BACKGROUND_ICON);
     String backgroundStaleIconString = buildIconString(options.backgroundStaleName(), BACKGROUND_STALE_ICON);
@@ -404,9 +471,9 @@ final class LocationLayerController {
   boolean onMapClick(@NonNull LatLng point) {
     PointF screenLoc = mapboxMap.getProjection().toScreenLocation(point);
     List<Feature> features = mapboxMap.queryRenderedFeatures(screenLoc,
-      BACKGROUND_LAYER,
-      FOREGROUND_LAYER,
-      BEARING_LAYER
+        BACKGROUND_LAYER,
+        FOREGROUND_LAYER,
+        BEARING_LAYER
     );
     return !features.isEmpty();
   }
@@ -418,7 +485,7 @@ final class LocationLayerController {
         Point point = Point.fromLngLat(value.getLongitude(), value.getLatitude());
         setLocationPoint(point);
       }
-    };
+  };
 
   private final MapboxAnimator.AnimationsValueChangeListener<Float> gpsBearingValueListener =
     new MapboxAnimator.AnimationsValueChangeListener<Float>() {
@@ -426,7 +493,7 @@ final class LocationLayerController {
       public void onNewAnimationValue(Float value) {
         setBearingProperty(PROPERTY_GPS_BEARING, value);
       }
-    };
+  };
 
   private final MapboxAnimator.AnimationsValueChangeListener<Float> compassBearingValueListener =
     new MapboxAnimator.AnimationsValueChangeListener<Float>() {
@@ -434,7 +501,7 @@ final class LocationLayerController {
       public void onNewAnimationValue(Float value) {
         setBearingProperty(PROPERTY_COMPASS_BEARING, value);
       }
-    };
+  };
 
   private final MapboxAnimator.AnimationsValueChangeListener<Float> accuracyValueListener =
     new MapboxAnimator.AnimationsValueChangeListener<Float>() {
@@ -442,7 +509,24 @@ final class LocationLayerController {
       public void onNewAnimationValue(Float value) {
         updateAccuracyRadius(value);
       }
-    };
+  };
+
+  /**
+   * The listener that handles the updating of the pulsing circle's radius and opacity.
+   */
+  private final MapboxAnimator.AnimationsValueChangeListener<Float> pulsingCircleRadiusListener =
+    new MapboxAnimator.AnimationsValueChangeListener<Float>() {
+      @Override
+      public void onNewAnimationValue(Float newPulsingRadiusValue) {
+        updatePulsingLocationCircleRadius(newPulsingRadiusValue);
+        if (options.pulsingCircleFadeEnabled()) {
+          double newPulsingOpacityValue = 1 - ((newPulsingRadiusValue / 100) * 3);
+          updatePulsingLocationCircleOpacity((float) newPulsingOpacityValue);
+        }
+      }
+  };
+
+
 
   Set<AnimatorListenerHolder> getAnimationListeners() {
     Set<AnimatorListenerHolder> holders = new HashSet<>();
@@ -459,6 +543,10 @@ final class LocationLayerController {
       holders.add(new AnimatorListenerHolder(MapboxAnimator.ANIMATOR_LAYER_ACCURACY, accuracyValueListener));
     }
 
+    if (options.pulseEnabled()) {
+      holders.add(new AnimatorListenerHolder(MapboxAnimator.ANIMATOR_PULSING_CIRCLE,
+          pulsingCircleRadiusListener));
+    }
     return holders;
   }
 }
